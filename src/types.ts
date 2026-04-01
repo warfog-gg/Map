@@ -1,65 +1,57 @@
-/** Raw OSM node */
-export interface OsmNode {
-  id: number;
-  lat: number;
-  lon: number;
-  tags?: Record<string, string>;
-}
-
-/** Raw OSM way */
-export interface OsmWay {
-  id: number;
-  nodes: number[];
-  tags?: Record<string, string>;
-}
-
-/** Parsed map data ready for fantasy conversion */
-export interface MapData {
-  bounds: { south: number; west: number; north: number; east: number };
-  buildings: Building[];
-  roads: Road[];
-  waterAreas: Polygon[];
-  greenAreas: Polygon[];
-  /** Elevation grid: rows x cols of height values (meters) */
-  elevation: number[][];
-  elevationBounds: { minElev: number; maxElev: number };
-}
-
-export interface Building {
-  polygon: [number, number][];  // [x, z] local coords
+/** Hex cell on the grid */
+export interface Cell {
+  id: string;
+  /** Grid coordinates */
+  col: number;
+  row: number;
+  /** World position (with jitter for organic feel) */
+  x: number;
+  z: number;
+  /** Number of stacked blocks (0 = empty) */
   height: number;
-  type: FantasyBuildingType;
-  tags: Record<string, string>;
 }
 
-export interface Road {
-  points: [number, number][];   // [x, z] local coords
-  width: number;
-  type: FantasyRoadType;
-}
+/** Grid state: map of cell id -> cell */
+export type GridState = Map<string, Cell>;
 
-export interface Polygon {
-  points: [number, number][];   // [x, z] local coords
-}
+/** Building block types auto-assigned by constraint system */
+export type BlockPart =
+  | 'foundation'   // ground level stone base
+  | 'wall'         // middle floors timber frame
+  | 'roof'         // blue slate peaked roof
+  | 'tower_top'    // pointed tower cap
+  | 'arch'         // archway between buildings
+  | 'window';      // window detail
 
-export type FantasyBuildingType =
-  | 'castle'
-  | 'tower'
-  | 'cottage'
-  | 'temple'
-  | 'tavern'
-  | 'fortress'
-  | 'windmill';
+/** Warcraft Human color palette */
+export const PALETTE = {
+  // Buildings
+  stone:       '#8B8378',
+  stoneDark:   '#6B6358',
+  timber:      '#8B7355',
+  timberDark:  '#6B5335',
+  roofBlue:    '#2E4A7A',
+  roofBlueLt:  '#3A5A8A',
+  gold:        '#DAA520',
+  goldBright:  '#FFD700',
 
-export type FantasyRoadType =
-  | 'stone_road'
-  | 'dirt_path'
-  | 'bridge';
+  // Environment
+  grass:       '#4A7A2E',
+  grassDark:   '#3A6A1E',
+  grassLight:  '#5A8A3E',
+  dirt:        '#8B7355',
+  water:       '#2E5A8A',
+  waterDeep:   '#1E3A6A',
+  waterShallow:'#4A8AB0',
 
-/** Application state */
-export interface AppState {
-  status: 'idle' | 'loading' | 'ready' | 'error';
-  mapData: MapData | null;
-  error: string | null;
-  searchQuery: string;
-}
+  // Trees
+  treeTrunk:   '#5C4033',
+  treeLeaf:    '#2E5A1E',
+  treeLeafLt:  '#3E7A2E',
+  treePine:    '#1E4A2E',
+
+  // Sky
+  skyTop:      '#87CEEB',
+  skyBottom:   '#B0E0FF',
+  fog:         '#C8DFF0',
+} as const;
