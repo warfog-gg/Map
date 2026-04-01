@@ -7,11 +7,10 @@ import type { GridState } from '../types';
 
 interface SceneProps {
   grid: GridState;
-  onCellClick: (id: string) => void;
-  onCellRightClick: (id: string) => void;
+  onCellTap: (id: string) => void;
 }
 
-export function Scene({ grid, onCellClick, onCellRightClick }: SceneProps) {
+export function Scene({ grid, onCellTap }: SceneProps) {
   return (
     <Canvas
       camera={{ position: [12, 14, 12], fov: 45, near: 0.1, far: 200 }}
@@ -49,7 +48,7 @@ export function Scene({ grid, onCellClick, onCellRightClick }: SceneProps) {
 
       {/* Game elements */}
       <Environment />
-      <GridCells grid={grid} onCellClick={onCellClick} onCellRightClick={onCellRightClick} />
+      <GridCells grid={grid} onCellTap={onCellTap} />
       <Buildings grid={grid} />
 
       {/* Camera controls */}

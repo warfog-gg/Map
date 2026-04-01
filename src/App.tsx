@@ -7,29 +7,31 @@ import type { GridState } from './types';
 const GRID_RADIUS = 7;
 const MAX_HEIGHT = 6;
 
+export type Mode = 'build' | 'remove';
+
 export function App() {
   const initialGrid = useMemo(() => generateGrid(GRID_RADIUS), []);
   const [grid, setGrid] = useState<GridState>(initialGrid);
+  const [mode, setMode] = useState<Mode>('build');
 
-  const handleCellClick = useCallback((id: string) => {
+  const handleCellTap = useCallback((id: string) => {
     setGrid((prev) => {
       const cell = prev.get(id);
-      if (!cell || cell.height >= MAX_HEIGHT) return prev;
-      const next = new Map(prev);
-      next.set(id, { ...cell, height: cell.height + 1 });
-      return next;
-    });
-  }, []);
+      if (!cell) return prev;
 
-  const handleCellRightClick = useCallback((id: string) => {
-    setGrid((prev) => {
-      const cell = prev.get(id);
-      if (!cell || cell.height <= 0) return prev;
-      const next = new Map(prev);
-      next.set(id, { ...cell, height: cell.height - 1 });
-      return next;
+      if (mode === 'build') {
+        if (cell.height >= MAX_HEIGHT) return prev;
+        const next = new Map(prev);
+        next.set(id, { ...cell, height: cell.height + 1 });
+        return next;
+      } else {
+        if (cell.height <= 0) return prev;
+        const next = new Map(prev);
+        next.set(id, { ...cell, height: cell.height - 1 });
+        return next;
+      }
     });
-  }, []);
+  }, [mode]);
 
   const handleClear = useCallback(() => {
     setGrid((prev) => {
@@ -49,10 +51,14 @@ export function App() {
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <Scene
         grid={grid}
-        onCellClick={handleCellClick}
-        onCellRightClick={handleCellRightClick}
+        onCellTap={handleCellTap}
       />
-      <UI blockCount={blockCount} onClear={handleClear} />
+      <UI
+        blockCount={blockCount}
+        mode={mode}
+        onModeChange={setMode}
+        onClear={handleClear}
+      />
     </div>
   );
 }

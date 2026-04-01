@@ -6,11 +6,10 @@ import { getHexCorners, CELL_SIZE } from '../grid';
 
 interface GridCellsProps {
   grid: GridState;
-  onCellClick: (id: string) => void;
-  onCellRightClick: (id: string) => void;
+  onCellTap: (id: string) => void;
 }
 
-export function GridCells({ grid, onCellClick, onCellRightClick }: GridCellsProps) {
+export function GridCells({ grid, onCellTap }: GridCellsProps) {
   const cells = useMemo(() => Array.from(grid.values()), [grid]);
 
   return (
@@ -22,8 +21,7 @@ export function GridCells({ grid, onCellClick, onCellRightClick }: GridCellsProp
           x={cell.x}
           z={cell.z}
           height={cell.height}
-          onCellClick={onCellClick}
-          onCellRightClick={onCellRightClick}
+          onCellTap={onCellTap}
         />
       ))}
     </group>
@@ -35,11 +33,10 @@ interface HexCellProps {
   x: number;
   z: number;
   height: number;
-  onCellClick: (id: string) => void;
-  onCellRightClick: (id: string) => void;
+  onCellTap: (id: string) => void;
 }
 
-function HexCell({ id, x, z, height, onCellClick, onCellRightClick }: HexCellProps) {
+function HexCell({ id, x, z, height, onCellTap }: HexCellProps) {
   const geometry = useMemo(() => {
     const corners = getHexCorners(0, 0, CELL_SIZE * 0.5);
     const shape = new THREE.Shape();
@@ -54,17 +51,9 @@ function HexCell({ id, x, z, height, onCellClick, onCellRightClick }: HexCellPro
   const handleClick = useCallback(
     (e: THREE.Event & { stopPropagation: () => void }) => {
       e.stopPropagation();
-      onCellClick(id);
+      onCellTap(id);
     },
-    [id, onCellClick],
-  );
-
-  const handleContextMenu = useCallback(
-    (e: THREE.Event & { stopPropagation: () => void }) => {
-      e.stopPropagation();
-      onCellRightClick(id);
-    },
-    [id, onCellRightClick],
+    [id, onCellTap],
   );
 
   // Cell color varies with height
@@ -82,7 +71,6 @@ function HexCell({ id, x, z, height, onCellClick, onCellRightClick }: HexCellPro
         rotation-x={-Math.PI / 2}
         position={[0, 0.01, 0]}
         onClick={handleClick}
-        onContextMenu={handleContextMenu}
         receiveShadow
       >
         <meshLambertMaterial color={color} />
