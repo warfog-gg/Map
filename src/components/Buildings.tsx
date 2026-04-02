@@ -2,54 +2,48 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { GridState } from '../types';
 import { PALETTE } from '../types';
-import { getNeighborIds, CELL_SIZE } from '../grid';
+import { cellCorners, cellCenter, getNeighbors } from '../grid';
 
 interface BuildingsProps {
   grid: GridState;
 }
 
 const BLOCK_H = 0.8;
-const BLOCK_R = CELL_SIZE * 0.44;
+const INSET = 0.92; // slight inset from cell edge for gap between buildings
 
 export function Buildings({ grid }: BuildingsProps) {
   const blocks = useMemo(() => {
     const result: {
-      x: number; y: number; z: number;
+      corners: [number, number][];
+      center: { x: number; z: number };
+      y: number;
       isTop: boolean;
       isBottom: boolean;
-      height: number;
       level: number;
-      neighborMask: number;
+      height: number;
       neighborCount: number;
     }[] = [];
 
-    grid.forEach((cell) => {
+    grid.cells.forEach((cell) => {
       if (cell.height <= 0) return;
 
-      const nIds = getNeighborIds(cell.col, cell.row);
-      const neighborHeights = nIds.map((nid) => grid.get(nid)?.height ?? 0);
+      const corners = cellCorners(cell, grid.vertices);
+      const center = cellCenter(cell, grid.vertices);
+      const neighbors = getNeighbors(cell, grid.cells);
 
       for (let level = 0; level < cell.height; level++) {
-        // Neighbor mask at this level (which neighbors also have a block at this height)
-        let mask = 0;
-        let count = 0;
-        neighborHeights.forEach((nh, i) => {
-          if (nh > level) {
-            mask |= (1 << i);
-            count++;
-          }
-        });
+        // Count neighbors that also have a block at this level
+        const nCount = neighbors.filter((n) => n.height > level).length;
 
         result.push({
-          x: cell.x,
+          corners,
+          center,
           y: level * BLOCK_H,
-          z: cell.z,
           isTop: level === cell.height - 1,
           isBottom: level === 0,
-          height: cell.height,
           level,
-          neighborMask: mask,
-          neighborCount: count,
+          height: cell.height,
+          neighborCount: nCount,
         });
       }
     });
@@ -60,138 +54,191 @@ export function Buildings({ grid }: BuildingsProps) {
   return (
     <group>
       {blocks.map((b, i) => (
-        <BuildingBlock key={i} {...b} />
+        <QuadBlock key={i} {...b} />
       ))}
     </group>
   );
 }
 
-interface BlockProps {
-  x: number; y: number; z: number;
+interface QuadBlockProps {
+  corners: [number, number][];
+  center: { x: number; z: number };
+  y: number;
   isTop: boolean;
   isBottom: boolean;
-  height: number;
   level: number;
-  neighborMask: number;
+  height: number;
   neighborCount: number;
 }
 
-function BuildingBlock({ x, y, z, isTop, isBottom, height, level, neighborCount }: BlockProps) {
+/** Extrude a quad cell shape into a building block */
+function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighborCount }: QuadBlockProps) {
   const isTower = height >= 4 && neighborCount <= 1;
 
-  // Wall color: stone at base, timber for upper floors
-  const wallColor = useMemo(() => {
-    if (isBottom) return PALETTE.stone;
-    if (level <= 1) return PALETTE.stoneDark;
-    return level % 2 === 0 ? PALETTE.timber : PALETTE.timberDark;
-  }, [isBottom, level]);
+  // Inset corners slightly toward center for gaps between buildings
+  const insetCorners = useMemo(() => {
+    return corners.map(([cx, cz]) => {
+      const dx = cx - center.x;
+      const dz = cz - center.z;
+      return [center.x + dx * INSET, center.z + dz * INSET] as [number, number];
+    });
+  }, [corners, center]);
 
-  // Roof color
-  const roofColor = isTower ? PALETTE.roofBlueLt : PALETTE.roofBlue;
+  // Wall geometry: extruded quad prism
+  const wallGeo = useMemo(() => {
+    return buildExtrudedQuad(insetCorners, BLOCK_H);
+  }, [insetCorners]);
+
+  // Top face geometry
+  const topGeo = useMemo(() => {
+    return buildQuadFace(insetCorners, BLOCK_H);
+  }, [insetCorners]);
+
+  // Bottom face geometry
+  const bottomGeo = useMemo(() => {
+    return buildQuadFace(insetCorners, 0);
+  }, [insetCorners]);
+
+  // Wall color by level
+  const wallColor = isBottom ? PALETTE.stone
+    : level <= 1 ? PALETTE.stoneDark
+    : level % 2 === 0 ? PALETTE.timber : PALETTE.timberDark;
+
+  const topColor = isTop ? PALETTE.roofBlue : wallColor;
 
   return (
-    <group position={[x, y, z]}>
-      {/* Main block body */}
-      <mesh castShadow receiveShadow position={[0, BLOCK_H / 2, 0]}>
-        <cylinderGeometry args={[BLOCK_R * 0.92, BLOCK_R, BLOCK_H, 6]} />
+    <group position={[0, y, 0]}>
+      {/* Walls (sides) */}
+      <mesh geometry={wallGeo} castShadow receiveShadow>
         <meshLambertMaterial color={wallColor} />
       </mesh>
 
-      {/* Stone trim at bottom of each block */}
-      <mesh castShadow position={[0, 0.04, 0]}>
-        <cylinderGeometry args={[BLOCK_R * 1.02, BLOCK_R * 1.02, 0.08, 6]} />
-        <meshLambertMaterial color={PALETTE.stoneDark} />
+      {/* Top face */}
+      <mesh geometry={topGeo} castShadow receiveShadow>
+        <meshLambertMaterial color={topColor} />
       </mesh>
 
-      {/* Window details on upper floors */}
-      {level > 0 && !isTop && (
-        <WindowDetails y={BLOCK_H / 2} radius={BLOCK_R} />
-      )}
+      {/* Bottom face */}
+      <mesh geometry={bottomGeo} receiveShadow>
+        <meshLambertMaterial color={wallColor} />
+      </mesh>
+
+      {/* Trim at base of block */}
+      <TrimRing corners={insetCorners} y={0} color={PALETTE.stoneDark} />
 
       {/* Gold trim on second floor */}
       {level === 1 && (
-        <mesh position={[0, BLOCK_H, 0]}>
-          <cylinderGeometry args={[BLOCK_R * 0.95, BLOCK_R * 0.97, 0.05, 6]} />
-          <meshLambertMaterial color={PALETTE.gold} />
-        </mesh>
+        <TrimRing corners={insetCorners} y={BLOCK_H} color={PALETTE.gold} />
       )}
 
-      {/* Roof on top block */}
-      {isTop && (
-        <>
-          {isTower ? (
-            <TowerRoof y={BLOCK_H} radius={BLOCK_R} color={roofColor} />
-          ) : (
-            <StandardRoof y={BLOCK_H} radius={BLOCK_R} color={roofColor} neighborCount={neighborCount} />
-          )}
-        </>
+      {/* Windows on upper non-top floors */}
+      {level > 0 && !isTop && (
+        <Windows corners={insetCorners} center={center} />
+      )}
+
+      {/* Roof on top */}
+      {isTop && isTower && (
+        <TowerRoof corners={insetCorners} center={center} y={BLOCK_H} />
+      )}
+      {isTop && !isTower && (
+        <PeakedRoof corners={insetCorners} center={center} y={BLOCK_H} flat={neighborCount >= 3} />
       )}
 
       {/* Door on ground floor */}
       {isBottom && (
-        <DoorDetail y={0} radius={BLOCK_R} />
+        <Door corners={insetCorners} center={center} />
       )}
     </group>
   );
 }
 
-/** Pointed tower roof (for tall isolated columns) */
-function TowerRoof({ y, radius, color }: { y: number; radius: number; color: string }) {
+/** Build side walls of an extruded quad */
+function buildExtrudedQuad(corners: [number, number][], h: number): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  const verts: number[] = [];
+  const normals: number[] = [];
+
+  for (let i = 0; i < corners.length; i++) {
+    const [x1, z1] = corners[i];
+    const [x2, z2] = corners[(i + 1) % corners.length];
+
+    // Normal for this face (pointing outward)
+    const dx = x2 - x1;
+    const dz = z2 - z1;
+    const nx = dz, nz = -dx;
+    const len = Math.sqrt(nx * nx + nz * nz) || 1;
+
+    // Two triangles per face
+    verts.push(
+      x1, 0, z1,  x2, 0, z2,  x2, h, z2,
+      x1, 0, z1,  x2, h, z2,  x1, h, z1,
+    );
+    for (let t = 0; t < 6; t++) {
+      normals.push(nx / len, 0, nz / len);
+    }
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+  return geo;
+}
+
+/** Build a flat quad face at height y */
+function buildQuadFace(corners: [number, number][], y: number): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  const [c0, c1, c2, c3] = corners;
+  const verts = new Float32Array([
+    c0[0], y, c0[1],  c1[0], y, c1[1],  c2[0], y, c2[1],
+    c0[0], y, c0[1],  c2[0], y, c2[1],  c3[0], y, c3[1],
+  ]);
+  const normals = new Float32Array([
+    0, 1, 0,  0, 1, 0,  0, 1, 0,
+    0, 1, 0,  0, 1, 0,  0, 1, 0,
+  ]);
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  return geo;
+}
+
+/** Decorative trim ring at a specific height */
+function TrimRing({ corners, y, color }: { corners: [number, number][]; y: number; color: string }) {
+  const geo = useMemo(() => {
+    // Slightly larger outline
+    const trimH = 0.04;
+    return buildExtrudedQuad(
+      corners.map(([x, z]) => [x, z] as [number, number]),
+      trimH,
+    );
+  }, [corners]);
+
   return (
-    <group position={[0, y, 0]}>
-      <mesh castShadow position={[0, 0.5, 0]}>
-        <coneGeometry args={[radius * 1.15, 1.0, 6]} />
-        <meshLambertMaterial color={color} />
-      </mesh>
-      {/* Gold tip */}
-      <mesh position={[0, 1.05, 0]}>
-        <sphereGeometry args={[0.06, 6, 4]} />
-        <meshLambertMaterial color={PALETTE.goldBright} emissive={PALETTE.gold} emissiveIntensity={0.3} />
-      </mesh>
-      {/* Flag */}
-      <mesh position={[0.08, 1.15, 0]} rotation-z={0.1}>
-        <planeGeometry args={[0.2, 0.12]} />
-        <meshLambertMaterial color="#1E3A8A" side={THREE.DoubleSide} />
-      </mesh>
-    </group>
+    <mesh geometry={geo} position={[0, y, 0]}>
+      <meshLambertMaterial color={color} />
+    </mesh>
   );
 }
 
-/** Standard peaked roof */
-function StandardRoof({ y, radius, color, neighborCount }: { y: number; radius: number; color: string; neighborCount: number }) {
-  const roofHeight = neighborCount >= 3 ? 0.25 : 0.45;
-  return (
-    <group position={[0, y, 0]}>
-      <mesh castShadow position={[0, roofHeight / 2, 0]}>
-        <coneGeometry args={[radius * 1.12, roofHeight, 6]} />
-        <meshLambertMaterial color={color} />
-      </mesh>
-      {/* Roof edge trim */}
-      <mesh position={[0, 0.02, 0]}>
-        <cylinderGeometry args={[radius * 1.13, radius * 1.13, 0.04, 6]} />
-        <meshLambertMaterial color={PALETTE.timber} />
-      </mesh>
-    </group>
-  );
-}
-
-/** Small window bumps */
-function WindowDetails({ y, radius }: { y: number; radius: number }) {
+/** Window details on walls */
+function Windows({ corners, center }: { corners: [number, number][]; center: { x: number; z: number } }) {
+  // Place a window on each face
   return (
     <group>
-      {[0, 2, 4].map((i) => {
-        const angle = (Math.PI / 3) * i + Math.PI / 6;
+      {corners.map((c, i) => {
+        const c2 = corners[(i + 1) % corners.length];
+        const mx = (c[0] + c2[0]) / 2;
+        const mz = (c[1] + c2[1]) / 2;
+        // Normal direction (outward)
+        const dx = c2[0] - c[0];
+        const dz = c2[1] - c[1];
+        const angle = Math.atan2(-dx, dz);
+
         return (
           <mesh
             key={i}
-            position={[
-              Math.cos(angle) * radius * 0.95,
-              y,
-              Math.sin(angle) * radius * 0.95,
-            ]}
-            rotation-y={-angle}
+            position={[mx, BLOCK_H * 0.5, mz]}
+            rotation-y={angle}
           >
-            <boxGeometry args={[0.15, 0.2, 0.04]} />
+            <boxGeometry args={[0.14, 0.18, 0.03]} />
             <meshLambertMaterial color={PALETTE.goldBright} emissive="#FFD700" emissiveIntensity={0.15} />
           </mesh>
         );
@@ -200,27 +247,114 @@ function WindowDetails({ y, radius }: { y: number; radius: number }) {
   );
 }
 
-/** Door arch on ground floor */
-function DoorDetail({ y, radius }: { y: number; radius: number }) {
-  const angle = Math.PI / 6; // face one hex edge
+/** Peaked roof: pyramid from quad corners to center peak */
+function PeakedRoof({ corners, center, y, flat }: {
+  corners: [number, number][]; center: { x: number; z: number }; y: number; flat: boolean;
+}) {
+  const geo = useMemo(() => {
+    const peakH = flat ? 0.15 : 0.4;
+    const g = new THREE.BufferGeometry();
+    const verts: number[] = [];
+    const normals: number[] = [];
+
+    // 4 triangular faces from each edge to center peak
+    for (let i = 0; i < corners.length; i++) {
+      const [x1, z1] = corners[i];
+      const [x2, z2] = corners[(i + 1) % corners.length];
+
+      verts.push(
+        x1, y, z1,
+        x2, y, z2,
+        center.x, y + peakH, center.z,
+      );
+
+      // Compute face normal
+      const ax = x2 - x1, az = z2 - z1;
+      const bx = center.x - x1, by = peakH, bz = center.z - z1;
+      let nx = az * by - 0 * bz;
+      let ny = 0 * bx - ax * by;
+      let nz = ax * bz - az * bx;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= len; ny /= len; nz /= len;
+      normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    }
+
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+    return g;
+  }, [corners, center, y, flat]);
+
   return (
-    <group
-      position={[
-        Math.cos(angle) * radius * 0.93,
-        y + 0.3,
-        Math.sin(angle) * radius * 0.93,
-      ]}
-      rotation-y={-angle}
-    >
-      {/* Door frame */}
-      <mesh>
-        <boxGeometry args={[0.22, 0.45, 0.06]} />
-        <meshLambertMaterial color={PALETTE.timberDark} />
+    <mesh geometry={geo} castShadow>
+      <meshLambertMaterial color={PALETTE.roofBlue} />
+    </mesh>
+  );
+}
+
+/** Tower roof: taller pointed pyramid with flag */
+function TowerRoof({ corners, center, y }: {
+  corners: [number, number][]; center: { x: number; z: number }; y: number;
+}) {
+  const geo = useMemo(() => {
+    const peakH = 0.8;
+    const g = new THREE.BufferGeometry();
+    const verts: number[] = [];
+    const normals: number[] = [];
+
+    for (let i = 0; i < corners.length; i++) {
+      const [x1, z1] = corners[i];
+      const [x2, z2] = corners[(i + 1) % corners.length];
+
+      verts.push(x1, y, z1, x2, y, z2, center.x, y + peakH, center.z);
+
+      const ax = x2 - x1, az = z2 - z1;
+      const bx = center.x - x1, by = peakH, bz = center.z - z1;
+      let nx = az * by;
+      let ny = -ax * by;
+      let nz = ax * bz - az * bx;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= len; ny /= len; nz /= len;
+      normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    }
+
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+    return g;
+  }, [corners, center, y]);
+
+  return (
+    <group>
+      <mesh geometry={geo} castShadow>
+        <meshLambertMaterial color={PALETTE.roofBlueLt} />
       </mesh>
-      {/* Door arch top */}
-      <mesh position={[0, 0.22, 0]}>
-        <sphereGeometry args={[0.11, 6, 4, 0, Math.PI * 2, 0, Math.PI / 2]} />
-        <meshLambertMaterial color={PALETTE.stoneDark} />
+      {/* Gold tip */}
+      <mesh position={[center.x, y + 0.85, center.z]}>
+        <sphereGeometry args={[0.05, 6, 4]} />
+        <meshLambertMaterial color={PALETTE.goldBright} emissive={PALETTE.gold} emissiveIntensity={0.3} />
+      </mesh>
+      {/* Flag */}
+      <mesh position={[center.x + 0.07, y + 0.95, center.z]} rotation-z={0.1}>
+        <planeGeometry args={[0.18, 0.1]} />
+        <meshLambertMaterial color="#1E3A8A" side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Door on ground floor */
+function Door({ corners, center }: { corners: [number, number][]; center: { x: number; z: number } }) {
+  // Place door at midpoint of first edge
+  const mx = (corners[0][0] + corners[1][0]) / 2;
+  const mz = (corners[0][1] + corners[1][1]) / 2;
+  const dx = corners[1][0] - corners[0][0];
+  const dz = corners[1][1] - corners[0][1];
+  const angle = Math.atan2(-dx, dz);
+
+  return (
+    <group position={[mx, 0.25, mz]} rotation-y={angle}>
+      <mesh>
+        <boxGeometry args={[0.2, 0.4, 0.05]} />
+        <meshLambertMaterial color={PALETTE.timberDark} />
       </mesh>
     </group>
   );

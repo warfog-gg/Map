@@ -1,27 +1,26 @@
-/** Hex cell on the grid */
-export interface Cell {
-  id: string;
-  /** Grid coordinates */
-  col: number;
-  row: number;
-  /** World position (with jitter for organic feel) */
+/** Shared vertex in the quad mesh */
+export interface Vertex {
+  id: number;
   x: number;
   z: number;
+}
+
+/** Quad cell on the grid */
+export interface Cell {
+  id: string;
+  col: number;
+  row: number;
+  /** 4 vertex indices (corners) in winding order */
+  corners: [number, number, number, number];
   /** Number of stacked blocks (0 = empty) */
   height: number;
 }
 
-/** Grid state: map of cell id -> cell */
-export type GridState = Map<string, Cell>;
-
-/** Building block types auto-assigned by constraint system */
-export type BlockPart =
-  | 'foundation'   // ground level stone base
-  | 'wall'         // middle floors timber frame
-  | 'roof'         // blue slate peaked roof
-  | 'tower_top'    // pointed tower cap
-  | 'arch'         // archway between buildings
-  | 'window';      // window detail
+/** Full grid state */
+export interface GridState {
+  cells: Map<string, Cell>;
+  vertices: Vertex[];
+}
 
 /** Warcraft Human color palette */
 export const PALETTE = {
