@@ -218,24 +218,41 @@ function TrimRing({ corners, y, color }: { corners: [number, number][]; y: numbe
   );
 }
 
+/** Compute outward normal for a wall edge, given cell center */
+function wallNormal(
+  c1: [number, number], c2: [number, number], center: { x: number; z: number }
+): { nx: number; nz: number; angle: number } {
+  const dx = c2[0] - c1[0];
+  const dz = c2[1] - c1[1];
+  // Two perpendicular candidates
+  let nx = dz, nz = -dx;
+  // Pick the one pointing away from center
+  const mx = (c1[0] + c2[0]) / 2;
+  const mz = (c1[1] + c2[1]) / 2;
+  const dot = nx * (mx - center.x) + nz * (mz - center.z);
+  if (dot < 0) { nx = -nx; nz = -nz; }
+  const len = Math.sqrt(nx * nx + nz * nz) || 1;
+  nx /= len; nz /= len;
+  // rotation-y so local +Z aligns with outward normal
+  const angle = Math.atan2(nx, nz);
+  return { nx, nz, angle };
+}
+
 /** Window details on walls */
 function Windows({ corners, center }: { corners: [number, number][]; center: { x: number; z: number } }) {
-  // Place a window on each face
   return (
     <group>
       {corners.map((c, i) => {
         const c2 = corners[(i + 1) % corners.length];
         const mx = (c[0] + c2[0]) / 2;
         const mz = (c[1] + c2[1]) / 2;
-        // Normal direction (outward)
-        const dx = c2[0] - c[0];
-        const dz = c2[1] - c[1];
-        const angle = Math.atan2(-dx, dz);
-
+        const { nx, nz, angle } = wallNormal(c, c2, center);
+        // Push out to wall surface (half the box depth)
+        const offset = 0.015;
         return (
           <mesh
             key={i}
-            position={[mx, BLOCK_H * 0.5, mz]}
+            position={[mx + nx * offset, BLOCK_H * 0.5, mz + nz * offset]}
             rotation-y={angle}
           >
             <boxGeometry args={[0.14, 0.18, 0.03]} />
@@ -343,15 +360,13 @@ function TowerRoof({ corners, center, y }: {
 
 /** Door on ground floor */
 function Door({ corners, center }: { corners: [number, number][]; center: { x: number; z: number } }) {
-  // Place door at midpoint of first edge
   const mx = (corners[0][0] + corners[1][0]) / 2;
   const mz = (corners[0][1] + corners[1][1]) / 2;
-  const dx = corners[1][0] - corners[0][0];
-  const dz = corners[1][1] - corners[0][1];
-  const angle = Math.atan2(-dx, dz);
+  const { nx, nz, angle } = wallNormal(corners[0], corners[1], center);
+  const offset = 0.025;
 
   return (
-    <group position={[mx, 0.25, mz]} rotation-y={angle}>
+    <group position={[mx + nx * offset, 0.25, mz + nz * offset]} rotation-y={angle}>
       <mesh>
         <boxGeometry args={[0.2, 0.4, 0.05]} />
         <meshLambertMaterial color={PALETTE.timberDark} />
