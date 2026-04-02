@@ -76,12 +76,18 @@ function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighbo
   const isTower = height >= 4 && neighborCount <= 1;
 
   // Inset corners slightly toward center for gaps between buildings
+  // Then ensure CCW winding (viewed from +Y) so normals point correctly
   const insetCorners = useMemo(() => {
-    return corners.map(([cx, cz]) => {
+    const inset = corners.map(([cx, cz]) => {
       const dx = cx - center.x;
       const dz = cz - center.z;
       return [center.x + dx * INSET, center.z + dz * INSET] as [number, number];
     });
+    // Check winding: cross product of edge01 x edge03 in XZ → if Y component < 0, it's CW → reverse
+    const [c0, c1, , c3] = inset;
+    const cross = (c1[0] - c0[0]) * (c3[1] - c0[1]) - (c1[1] - c0[1]) * (c3[0] - c0[0]);
+    if (cross < 0) inset.reverse();
+    return inset;
   }, [corners, center]);
 
   // Wall geometry: extruded quad prism
@@ -94,9 +100,9 @@ function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighbo
     return buildQuadFace(insetCorners, BLOCK_H);
   }, [insetCorners]);
 
-  // Bottom face geometry
+  // Bottom face geometry (normal facing down)
   const bottomGeo = useMemo(() => {
-    return buildQuadFace(insetCorners, 0);
+    return buildQuadFace(insetCorners, 0, false);
   }, [insetCorners]);
 
   // Wall color by level
@@ -110,17 +116,17 @@ function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighbo
     <group position={[0, y, 0]}>
       {/* Walls (sides) */}
       <mesh geometry={wallGeo} castShadow receiveShadow>
-        <meshLambertMaterial color={wallColor} side={THREE.DoubleSide} />
+        <meshLambertMaterial color={wallColor} />
       </mesh>
 
       {/* Top face */}
       <mesh geometry={topGeo} castShadow receiveShadow>
-        <meshLambertMaterial color={topColor} side={THREE.DoubleSide} />
+        <meshLambertMaterial color={topColor} />
       </mesh>
 
       {/* Bottom face */}
       <mesh geometry={bottomGeo} receiveShadow>
-        <meshLambertMaterial color={wallColor} side={THREE.DoubleSide} />
+        <meshLambertMaterial color={wallColor} />
       </mesh>
 
       {/* Trim at base of block */}
@@ -152,7 +158,12 @@ function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighbo
   );
 }
 
-/** Build side walls of an extruded quad */
+/**
+ * Build side walls of an extruded quad.
+ * Assumes corners are CCW when viewed from +Y.
+ * For CCW winding, the outward normal of edge (c[i] → c[i+1]) is (-dz, 0, dx).
+ * Wall triangles wind CCW when viewed from outside.
+ */
 function buildExtrudedQuad(corners: [number, number][], h: number): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   const verts: number[] = [];
@@ -162,16 +173,16 @@ function buildExtrudedQuad(corners: [number, number][], h: number): THREE.Buffer
     const [x1, z1] = corners[i];
     const [x2, z2] = corners[(i + 1) % corners.length];
 
-    // Normal for this face (pointing outward)
+    // For CCW polygon, outward normal is (-dz, 0, dx)
     const dx = x2 - x1;
     const dz = z2 - z1;
-    const nx = dz, nz = -dx;
+    const nx = -dz, nz = dx;
     const len = Math.sqrt(nx * nx + nz * nz) || 1;
 
-    // Two triangles per face
+    // Two triangles per face, CCW when viewed from outside (normal direction)
     verts.push(
-      x1, 0, z1,  x2, 0, z2,  x2, h, z2,
-      x1, 0, z1,  x2, h, z2,  x1, h, z1,
+      x1, 0, z1,  x1, h, z1,  x2, h, z2,
+      x1, 0, z1,  x2, h, z2,  x2, 0, z2,
     );
     for (let t = 0; t < 6; t++) {
       normals.push(nx / len, 0, nz / len);
@@ -183,17 +194,27 @@ function buildExtrudedQuad(corners: [number, number][], h: number): THREE.Buffer
   return geo;
 }
 
-/** Build a flat quad face at height y */
-function buildQuadFace(corners: [number, number][], y: number): THREE.BufferGeometry {
+/**
+ * Build a flat quad face at height y.
+ * Assumes corners are CCW from +Y. Top face: CCW order → +Y normal. Bottom face: reverse → -Y normal.
+ */
+function buildQuadFace(corners: [number, number][], y: number, faceUp = true): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   const [c0, c1, c2, c3] = corners;
-  const verts = new Float32Array([
-    c0[0], y, c0[1],  c1[0], y, c1[1],  c2[0], y, c2[1],
-    c0[0], y, c0[1],  c2[0], y, c2[1],  c3[0], y, c3[1],
-  ]);
+  const ny = faceUp ? 1 : -1;
+  // CCW from +Y = normal up; CW from +Y = normal down
+  const verts = faceUp
+    ? new Float32Array([
+        c0[0], y, c0[1],  c1[0], y, c1[1],  c2[0], y, c2[1],
+        c0[0], y, c0[1],  c2[0], y, c2[1],  c3[0], y, c3[1],
+      ])
+    : new Float32Array([
+        c0[0], y, c0[1],  c2[0], y, c2[1],  c1[0], y, c1[1],
+        c0[0], y, c0[1],  c3[0], y, c3[1],  c2[0], y, c2[1],
+      ]);
   const normals = new Float32Array([
-    0, 1, 0,  0, 1, 0,  0, 1, 0,
-    0, 1, 0,  0, 1, 0,  0, 1, 0,
+    0, ny, 0,  0, ny, 0,  0, ny, 0,
+    0, ny, 0,  0, ny, 0,  0, ny, 0,
   ]);
   geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
@@ -213,7 +234,7 @@ function TrimRing({ corners, y, color }: { corners: [number, number][]; y: numbe
 
   return (
     <mesh geometry={geo} position={[0, y, 0]}>
-      <meshLambertMaterial color={color} side={THREE.DoubleSide} />
+      <meshLambertMaterial color={color} />
     </mesh>
   );
 }
@@ -264,7 +285,10 @@ function Windows({ corners, center }: { corners: [number, number][]; center: { x
   );
 }
 
-/** Peaked roof: pyramid from quad corners to center peak */
+/**
+ * Peaked roof: pyramid from quad edges to center peak.
+ * CCW corners → each roof triangle needs outward-facing normal.
+ */
 function PeakedRoof({ corners, center, y, flat }: {
   corners: [number, number][]; center: { x: number; z: number }; y: number; flat: boolean;
 }) {
@@ -274,23 +298,28 @@ function PeakedRoof({ corners, center, y, flat }: {
     const verts: number[] = [];
     const normals: number[] = [];
 
-    // 4 triangular faces from each edge to center peak
     for (let i = 0; i < corners.length; i++) {
       const [x1, z1] = corners[i];
       const [x2, z2] = corners[(i + 1) % corners.length];
 
+      // Triangle: edge base → peak. Wind so normal faces outward (away from center + up).
+      // For CCW corners, the outward side is: c[i], peak, c[i+1]
       verts.push(
         x1, y, z1,
-        x2, y, z2,
         center.x, y + peakH, center.z,
+        x2, y, z2,
       );
 
-      // Compute face normal
-      const ax = x2 - x1, az = z2 - z1;
-      const bx = center.x - x1, by = peakH, bz = center.z - z1;
-      let nx = az * by - 0 * bz;
-      let ny = 0 * bx - ax * by;
-      let nz = ax * bz - az * bx;
+      // Cross product of two edges of this triangle
+      const e1x = center.x - x1, e1y = peakH, e1z = center.z - z1;
+      const e2x = x2 - x1, e2y = 0, e2z = z2 - z1;
+      let nx = e1y * e2z - e1z * e2y;
+      let ny = e1z * e2x - e1x * e2z;
+      let nz = e1x * e2y - e1y * e2x;
+      // Ensure normal points outward (away from center at base level)
+      const mx = (x1 + x2) / 2 - center.x;
+      const mz = (z1 + z2) / 2 - center.z;
+      if (nx * mx + nz * mz < 0) { nx = -nx; ny = -ny; nz = -nz; }
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       nx /= len; ny /= len; nz /= len;
       normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
@@ -303,7 +332,7 @@ function PeakedRoof({ corners, center, y, flat }: {
 
   return (
     <mesh geometry={geo} castShadow>
-      <meshLambertMaterial color={PALETTE.roofBlue} side={THREE.DoubleSide} />
+      <meshLambertMaterial color={PALETTE.roofBlue} />
     </mesh>
   );
 }
@@ -322,13 +351,16 @@ function TowerRoof({ corners, center, y }: {
       const [x1, z1] = corners[i];
       const [x2, z2] = corners[(i + 1) % corners.length];
 
-      verts.push(x1, y, z1, x2, y, z2, center.x, y + peakH, center.z);
+      verts.push(x1, y, z1, center.x, y + peakH, center.z, x2, y, z2);
 
-      const ax = x2 - x1, az = z2 - z1;
-      const bx = center.x - x1, by = peakH, bz = center.z - z1;
-      let nx = az * by;
-      let ny = -ax * by;
-      let nz = ax * bz - az * bx;
+      const e1x = center.x - x1, e1y = peakH, e1z = center.z - z1;
+      const e2x = x2 - x1, e2y = 0, e2z = z2 - z1;
+      let nx = e1y * e2z - e1z * e2y;
+      let ny = e1z * e2x - e1x * e2z;
+      let nz = e1x * e2y - e1y * e2x;
+      const mx = (x1 + x2) / 2 - center.x;
+      const mz = (z1 + z2) / 2 - center.z;
+      if (nx * mx + nz * mz < 0) { nx = -nx; ny = -ny; nz = -nz; }
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       nx /= len; ny /= len; nz /= len;
       normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
@@ -342,7 +374,7 @@ function TowerRoof({ corners, center, y }: {
   return (
     <group>
       <mesh geometry={geo} castShadow>
-        <meshLambertMaterial color={PALETTE.roofBlueLt} side={THREE.DoubleSide} />
+        <meshLambertMaterial color={PALETTE.roofBlueLt} />
       </mesh>
       {/* Gold tip */}
       <mesh position={[center.x, y + 0.85, center.z]}>
@@ -352,7 +384,7 @@ function TowerRoof({ corners, center, y }: {
       {/* Flag */}
       <mesh position={[center.x + 0.07, y + 0.95, center.z]} rotation-z={0.1}>
         <planeGeometry args={[0.18, 0.1]} />
-        <meshLambertMaterial color="#1E3A8A" side={THREE.DoubleSide} />
+        <meshLambertMaterial color="#1E3A8A" side={THREE.DoubleSide} /> {/* flag is a flat plane, DoubleSide needed */}
       </mesh>
     </group>
   );
