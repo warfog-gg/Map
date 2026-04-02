@@ -1,57 +1,75 @@
 import { useCallback, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useThree } from '@react-three/fiber';
 import type { GridState } from '../types';
 import { PALETTE } from '../types';
-import { cellCorners, cellCenter } from '../grid';
 
 interface GridCellsProps {
   grid: GridState;
-  onCellTap: (id: string) => void;
+  onTap: (worldX: number, worldZ: number) => void;
 }
 
-export function GridCells({ grid, onCellTap }: GridCellsProps) {
-  const cells = useMemo(() => Array.from(grid.cells.values()), [grid]);
+export function GridCells({ grid, onTap }: GridCellsProps) {
+  // Visual ground cells
+  const groundGeo = useMemo(() => {
+    const positions: number[] = [];
+    const normals: number[] = [];
 
-  // Precompute cell centers for hit detection
-  const cellCenters = useMemo(() => {
-    const centers: { id: string; x: number; z: number; y: number }[] = [];
     grid.cells.forEach((cell) => {
-      const c = cellCenter(cell, grid.vertices);
-      centers.push({ id: cell.id, x: c.x, z: c.z, y: cell.height * 0.8 });
+      const [c0, c1, c2, c3] = cell.corners.map((vi) => grid.vertices[vi]);
+      // Two triangles per cell (CCW from +Y)
+      positions.push(
+        c0.x, 0, c0.z, c1.x, 0, c1.z, c2.x, 0, c2.z,
+        c0.x, 0, c0.z, c2.x, 0, c2.z, c3.x, 0, c3.z,
+      );
+      for (let i = 0; i < 6; i++) normals.push(0, 1, 0);
     });
-    return centers;
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
+    geo.computeBoundingSphere();
+    return geo;
+  }, [grid]);
+
+  // Grid lines
+  const linesGeo = useMemo(() => {
+    const positions: number[] = [];
+    grid.cells.forEach((cell) => {
+      const corners = cell.corners.map((vi) => grid.vertices[vi]);
+      for (let i = 0; i < 4; i++) {
+        const a = corners[i], b = corners[(i + 1) % 4];
+        positions.push(a.x, 0.02, a.z, b.x, 0.02, b.z);
+      }
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    return geo;
   }, [grid]);
 
   return (
     <group>
-      {/* Invisible click plane covering the entire grid area */}
-      <ClickPlane cellCenters={cellCenters} onCellTap={onCellTap} />
+      {/* Visual ground */}
+      <mesh geometry={groundGeo} receiveShadow>
+        <meshLambertMaterial color={PALETTE.grassLight} />
+      </mesh>
 
-      {/* Visual quad cells */}
-      {cells.map((cell) => (
-        <QuadCellVisual
-          key={cell.id}
-          corners={cellCorners(cell, grid.vertices)}
-          height={cell.height}
-        />
-      ))}
+      {/* Grid lines */}
+      <lineSegments geometry={linesGeo}>
+        <lineBasicMaterial color="#2A5A1A" transparent opacity={0.2} />
+      </lineSegments>
+
+      {/* Invisible tap plane */}
+      <TapPlane onTap={onTap} />
     </group>
   );
 }
 
-/** Large invisible plane that catches all taps and finds nearest cell */
-function ClickPlane({
-  cellCenters,
-  onCellTap,
-}: {
-  cellCenters: { id: string; x: number; z: number; y: number }[];
-  onCellTap: (id: string) => void;
-}) {
+/** Invisible plane that catches taps and reports world XZ coordinates */
+function TapPlane({ onTap }: { onTap: (x: number, z: number) => void }) {
   const pointerDown = useRef<{ x: number; y: number; time: number } | null>(null);
 
-  const handlePointerDown = useCallback((e: THREE.Event & { stopPropagation: () => void; clientX?: number; clientY?: number; nativeEvent?: PointerEvent }) => {
-    const ne = (e as any).nativeEvent as PointerEvent | undefined;
+  const handlePointerDown = useCallback((e: any) => {
+    const ne = e.nativeEvent as PointerEvent | undefined;
     pointerDown.current = {
       x: ne?.clientX ?? 0,
       y: ne?.clientY ?? 0,
@@ -59,46 +77,26 @@ function ClickPlane({
     };
   }, []);
 
-  const handlePointerUp = useCallback((e: THREE.Event & { stopPropagation: () => void; point?: THREE.Vector3; nativeEvent?: PointerEvent }) => {
-    const ne = (e as any).nativeEvent as PointerEvent | undefined;
+  const handlePointerUp = useCallback((e: any) => {
+    const ne = e.nativeEvent as PointerEvent | undefined;
     const down = pointerDown.current;
     pointerDown.current = null;
-
     if (!down) return;
 
-    // Only count as tap if pointer didn't move much and was quick
     const dx = (ne?.clientX ?? 0) - down.x;
     const dy = (ne?.clientY ?? 0) - down.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const elapsed = Date.now() - down.time;
+    if (Math.sqrt(dx * dx + dy * dy) > 15 || Date.now() - down.time > 400) return;
 
-    if (dist > 15 || elapsed > 400) return; // was a drag, not a tap
-
-    const pt = (e as any).point as THREE.Vector3 | undefined;
+    const pt = e.point as THREE.Vector3 | undefined;
     if (!pt) return;
-
     e.stopPropagation();
-
-    // Find nearest cell center to click point (in XZ plane)
-    let bestId = '';
-    let bestDist = Infinity;
-    for (const c of cellCenters) {
-      const d = (pt.x - c.x) ** 2 + (pt.z - c.z) ** 2;
-      if (d < bestDist) {
-        bestDist = d;
-        bestId = c.id;
-      }
-    }
-
-    if (bestId && bestDist < 2) {
-      onCellTap(bestId);
-    }
-  }, [cellCenters, onCellTap]);
+    onTap(pt.x, pt.z);
+  }, [onTap]);
 
   return (
     <mesh
-      position={[0, 0, 0]}
       rotation-x={-Math.PI / 2}
+      position={[0, 0, 0]}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
     >
@@ -106,47 +104,4 @@ function ClickPlane({
       <meshBasicMaterial transparent opacity={0} depthWrite={false} />
     </mesh>
   );
-}
-
-/** Pure visual quad cell (no click handling) */
-function QuadCellVisual({ corners, height }: { corners: [number, number][]; height: number }) {
-  const geometry = useMemo(() => {
-    const geo = new THREE.BufferGeometry();
-    const positions = new Float32Array([
-      corners[0][0], 0, corners[0][1],
-      corners[1][0], 0, corners[1][1],
-      corners[2][0], 0, corners[2][1],
-      corners[0][0], 0, corners[0][1],
-      corners[2][0], 0, corners[2][1],
-      corners[3][0], 0, corners[3][1],
-    ]);
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.computeVertexNormals();
-    geo.computeBoundingSphere();
-    return geo;
-  }, [corners]);
-
-  const color = height === 0 ? PALETTE.grassLight : PALETTE.dirt;
-  const y = height > 0 ? height * 0.8 : 0;
-
-  return (
-    <group position={[0, y, 0]}>
-      <mesh geometry={geometry} position={[0, 0.01, 0]} receiveShadow>
-        <meshLambertMaterial color={color} />
-      </mesh>
-      <QuadBorder corners={corners} />
-    </group>
-  );
-}
-
-function QuadBorder({ corners }: { corners: [number, number][] }) {
-  const lineObj = useMemo(() => {
-    const geo = new THREE.BufferGeometry();
-    const pts = new Float32Array(corners.flatMap(([x, z]) => [x, 0.03, z]));
-    geo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-    const mat = new THREE.LineBasicMaterial({ color: '#2A5A1A', transparent: true, opacity: 0.25 });
-    return new THREE.LineLoop(geo, mat);
-  }, [corners]);
-
-  return <primitive object={lineObj} />;
 }

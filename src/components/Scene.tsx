@@ -7,10 +7,10 @@ import type { GridState } from '../types';
 
 interface SceneProps {
   grid: GridState;
-  onCellTap: (id: string) => void;
+  onTap: (worldX: number, worldZ: number) => void;
 }
 
-export function Scene({ grid, onCellTap }: SceneProps) {
+export function Scene({ grid, onTap }: SceneProps) {
   return (
     <Canvas
       camera={{ position: [12, 14, 12], fov: 45, near: 0.1, far: 200 }}
@@ -19,7 +19,6 @@ export function Scene({ grid, onCellTap }: SceneProps) {
       gl={{ antialias: true }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Lighting - warm Elwynn Forest afternoon */}
       <ambientLight intensity={0.4} color="#FFF5E0" />
       <directionalLight
         position={[15, 20, 10]}
@@ -36,22 +35,14 @@ export function Scene({ grid, onCellTap }: SceneProps) {
         shadow-camera-far={60}
         shadow-bias={-0.001}
       />
-      <directionalLight
-        position={[-8, 10, -5]}
-        intensity={0.3}
-        color="#8AB4F8"
-      />
+      <directionalLight position={[-8, 10, -5]} intensity={0.3} color="#8AB4F8" />
       <hemisphereLight args={['#87CEEB', '#4A7A2E', 0.3]} />
-
-      {/* Fog for depth */}
       <fog attach="fog" args={['#C8DFF0', 30, 60]} />
 
-      {/* Game elements */}
       <Environment />
-      <GridCells grid={grid} onCellTap={onCellTap} />
+      <GridCells grid={grid} onTap={onTap} />
       <Buildings grid={grid} />
 
-      {/* Camera controls */}
       <OrbitControls
         makeDefault
         enablePan

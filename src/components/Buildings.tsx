@@ -1,408 +1,81 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { GridState } from '../types';
-import { PALETTE } from '../types';
-import { cellCorners, cellCenter, getNeighbors } from '../grid';
+import { buildLookupTable } from '../modules';
+import { deformModule, computeVoxelConfig } from '../deform';
 
 interface BuildingsProps {
   grid: GridState;
 }
 
-const BLOCK_H = 0.8;
-const INSET = 0.92; // slight inset from cell edge for gap between buildings
-
+/**
+ * Renders all building modules by:
+ * 1. Computing 8-bit voxel config for each cell at each layer
+ * 2. Looking up the canonical module from the lookup table
+ * 3. Deforming it via bilinear interpolation to fit the irregular cell
+ * 4. Batching all geometry by color for efficient rendering
+ */
 export function Buildings({ grid }: BuildingsProps) {
-  const blocks = useMemo(() => {
-    const result: {
-      corners: [number, number][];
-      center: { x: number; z: number };
-      y: number;
-      isTop: boolean;
-      isBottom: boolean;
-      level: number;
-      height: number;
-      neighborCount: number;
-    }[] = [];
+  const lookup = useMemo(() => buildLookupTable(), []);
+
+  // Batch all module geometry by color
+  const batches = useMemo(() => {
+    const colorBatches = new Map<string, { positions: number[]; normals: number[] }>();
 
     grid.cells.forEach((cell) => {
-      if (cell.height <= 0) return;
+      for (let layer = 0; layer < grid.layers; layer++) {
+        const config = computeVoxelConfig(cell, layer, grid);
+        if (config === 0) continue; // all empty
 
-      const corners = cellCorners(cell, grid.vertices);
-      const center = cellCenter(cell, grid.vertices);
-      const neighbors = getNeighbors(cell, grid.cells);
+        const entry = lookup[config];
+        if (!entry || entry.module.vertices.length === 0) continue;
 
-      for (let level = 0; level < cell.height; level++) {
-        // Count neighbors that also have a block at this level
-        const nCount = neighbors.filter((n) => n.height > level).length;
+        const { positions, normals } = deformModule(
+          entry.module,
+          entry,
+          cell,
+          layer,
+          grid.vertices,
+        );
 
-        result.push({
-          corners,
-          center,
-          y: level * BLOCK_H,
-          isTop: level === cell.height - 1,
-          isBottom: level === 0,
-          level,
-          height: cell.height,
-          neighborCount: nCount,
-        });
+        const color = entry.module.color;
+        if (!colorBatches.has(color)) {
+          colorBatches.set(color, { positions: [], normals: [] });
+        }
+        const batch = colorBatches.get(color)!;
+        for (let i = 0; i < positions.length; i++) {
+          batch.positions.push(positions[i]);
+          batch.normals.push(normals[i]);
+        }
       }
     });
 
-    return result;
-  }, [grid]);
+    return colorBatches;
+  }, [grid, lookup]);
 
-  return (
-    <group>
-      {blocks.map((b, i) => (
-        <QuadBlock key={i} {...b} />
-      ))}
-    </group>
-  );
-}
+  // Render each color batch as a single mesh
+  const meshes = useMemo(() => {
+    const result: { color: string; geometry: THREE.BufferGeometry }[] = [];
 
-interface QuadBlockProps {
-  corners: [number, number][];
-  center: { x: number; z: number };
-  y: number;
-  isTop: boolean;
-  isBottom: boolean;
-  level: number;
-  height: number;
-  neighborCount: number;
-}
-
-/** Extrude a quad cell shape into a building block */
-function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighborCount }: QuadBlockProps) {
-  const isTower = height >= 4 && neighborCount <= 1;
-
-  // Inset corners slightly toward center for gaps between buildings
-  // Then ensure CCW winding (viewed from +Y) so normals point correctly
-  const insetCorners = useMemo(() => {
-    const inset = corners.map(([cx, cz]) => {
-      const dx = cx - center.x;
-      const dz = cz - center.z;
-      return [center.x + dx * INSET, center.z + dz * INSET] as [number, number];
+    batches.forEach((batch, color) => {
+      if (batch.positions.length === 0) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(batch.positions), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(batch.normals), 3));
+      geo.computeBoundingSphere();
+      result.push({ color, geometry: geo });
     });
-    // Check winding: cross product of edge01 x edge03 in XZ → if Y component < 0, it's CW → reverse
-    const [c0, c1, , c3] = inset;
-    const cross = (c1[0] - c0[0]) * (c3[1] - c0[1]) - (c1[1] - c0[1]) * (c3[0] - c0[0]);
-    if (cross < 0) inset.reverse();
-    return inset;
-  }, [corners, center]);
 
-  // Wall geometry: extruded quad prism
-  const wallGeo = useMemo(() => {
-    return buildExtrudedQuad(insetCorners, BLOCK_H);
-  }, [insetCorners]);
-
-  // Top face geometry
-  const topGeo = useMemo(() => {
-    return buildQuadFace(insetCorners, BLOCK_H);
-  }, [insetCorners]);
-
-  // Bottom face geometry (normal facing down)
-  const bottomGeo = useMemo(() => {
-    return buildQuadFace(insetCorners, 0, false);
-  }, [insetCorners]);
-
-  // Wall color by level
-  const wallColor = isBottom ? PALETTE.stone
-    : level <= 1 ? PALETTE.stoneDark
-    : level % 2 === 0 ? PALETTE.timber : PALETTE.timberDark;
-
-  const topColor = isTop ? PALETTE.roofBlue : wallColor;
-
-  return (
-    <group position={[0, y, 0]}>
-      {/* Walls (sides) */}
-      <mesh geometry={wallGeo} castShadow receiveShadow>
-        <meshLambertMaterial color={wallColor} />
-      </mesh>
-
-      {/* Top face */}
-      <mesh geometry={topGeo} castShadow receiveShadow>
-        <meshLambertMaterial color={topColor} />
-      </mesh>
-
-      {/* Bottom face */}
-      <mesh geometry={bottomGeo} receiveShadow>
-        <meshLambertMaterial color={wallColor} />
-      </mesh>
-
-      {/* Trim at base of block */}
-      <TrimRing corners={insetCorners} y={0} color={PALETTE.stoneDark} />
-
-      {/* Gold trim on second floor */}
-      {level === 1 && (
-        <TrimRing corners={insetCorners} y={BLOCK_H} color={PALETTE.gold} />
-      )}
-
-      {/* Windows on upper non-top floors */}
-      {level > 0 && !isTop && (
-        <Windows corners={insetCorners} center={center} />
-      )}
-
-      {/* Roof on top */}
-      {isTop && isTower && (
-        <TowerRoof corners={insetCorners} center={center} y={BLOCK_H} />
-      )}
-      {isTop && !isTower && (
-        <PeakedRoof corners={insetCorners} center={center} y={BLOCK_H} flat={neighborCount >= 3} />
-      )}
-
-      {/* Door on ground floor */}
-      {isBottom && (
-        <Door corners={insetCorners} center={center} />
-      )}
-    </group>
-  );
-}
-
-/**
- * Build side walls of an extruded quad.
- * Assumes corners are CCW when viewed from +Y.
- * For CCW winding, the outward normal of edge (c[i] → c[i+1]) is (-dz, 0, dx).
- * Wall triangles wind CCW when viewed from outside.
- */
-function buildExtrudedQuad(corners: [number, number][], h: number): THREE.BufferGeometry {
-  const geo = new THREE.BufferGeometry();
-  const verts: number[] = [];
-  const normals: number[] = [];
-
-  for (let i = 0; i < corners.length; i++) {
-    const [x1, z1] = corners[i];
-    const [x2, z2] = corners[(i + 1) % corners.length];
-
-    // For CCW polygon, outward normal is (-dz, 0, dx)
-    const dx = x2 - x1;
-    const dz = z2 - z1;
-    const nx = -dz, nz = dx;
-    const len = Math.sqrt(nx * nx + nz * nz) || 1;
-
-    // Two triangles per face, CCW when viewed from outside (normal direction)
-    verts.push(
-      x1, 0, z1,  x1, h, z1,  x2, h, z2,
-      x1, 0, z1,  x2, h, z2,  x2, 0, z2,
-    );
-    for (let t = 0; t < 6; t++) {
-      normals.push(nx / len, 0, nz / len);
-    }
-  }
-
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
-  return geo;
-}
-
-/**
- * Build a flat quad face at height y.
- * Assumes corners are CCW from +Y. Top face: CCW order → +Y normal. Bottom face: reverse → -Y normal.
- */
-function buildQuadFace(corners: [number, number][], y: number, faceUp = true): THREE.BufferGeometry {
-  const geo = new THREE.BufferGeometry();
-  const [c0, c1, c2, c3] = corners;
-  const ny = faceUp ? 1 : -1;
-  // CCW from +Y = normal up; CW from +Y = normal down
-  const verts = faceUp
-    ? new Float32Array([
-        c0[0], y, c0[1],  c1[0], y, c1[1],  c2[0], y, c2[1],
-        c0[0], y, c0[1],  c2[0], y, c2[1],  c3[0], y, c3[1],
-      ])
-    : new Float32Array([
-        c0[0], y, c0[1],  c2[0], y, c2[1],  c1[0], y, c1[1],
-        c0[0], y, c0[1],  c3[0], y, c3[1],  c2[0], y, c2[1],
-      ]);
-  const normals = new Float32Array([
-    0, ny, 0,  0, ny, 0,  0, ny, 0,
-    0, ny, 0,  0, ny, 0,  0, ny, 0,
-  ]);
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-  return geo;
-}
-
-/** Decorative trim ring at a specific height */
-function TrimRing({ corners, y, color }: { corners: [number, number][]; y: number; color: string }) {
-  const geo = useMemo(() => {
-    // Slightly larger outline
-    const trimH = 0.04;
-    return buildExtrudedQuad(
-      corners.map(([x, z]) => [x, z] as [number, number]),
-      trimH,
-    );
-  }, [corners]);
-
-  return (
-    <mesh geometry={geo} position={[0, y, 0]}>
-      <meshLambertMaterial color={color} />
-    </mesh>
-  );
-}
-
-/** Compute outward normal for a wall edge, given cell center */
-function wallNormal(
-  c1: [number, number], c2: [number, number], center: { x: number; z: number }
-): { nx: number; nz: number; angle: number } {
-  const dx = c2[0] - c1[0];
-  const dz = c2[1] - c1[1];
-  // Two perpendicular candidates
-  let nx = dz, nz = -dx;
-  // Pick the one pointing away from center
-  const mx = (c1[0] + c2[0]) / 2;
-  const mz = (c1[1] + c2[1]) / 2;
-  const dot = nx * (mx - center.x) + nz * (mz - center.z);
-  if (dot < 0) { nx = -nx; nz = -nz; }
-  const len = Math.sqrt(nx * nx + nz * nz) || 1;
-  nx /= len; nz /= len;
-  // rotation-y so local +Z aligns with outward normal
-  const angle = Math.atan2(nx, nz);
-  return { nx, nz, angle };
-}
-
-/** Window details on walls */
-function Windows({ corners, center }: { corners: [number, number][]; center: { x: number; z: number } }) {
-  return (
-    <group>
-      {corners.map((c, i) => {
-        const c2 = corners[(i + 1) % corners.length];
-        const mx = (c[0] + c2[0]) / 2;
-        const mz = (c[1] + c2[1]) / 2;
-        const { nx, nz, angle } = wallNormal(c, c2, center);
-        // Push out to wall surface (half the box depth)
-        const offset = 0.015;
-        return (
-          <mesh
-            key={i}
-            position={[mx + nx * offset, BLOCK_H * 0.5, mz + nz * offset]}
-            rotation-y={angle}
-          >
-            <boxGeometry args={[0.14, 0.18, 0.03]} />
-            <meshLambertMaterial color={PALETTE.goldBright} emissive="#FFD700" emissiveIntensity={0.15} />
-          </mesh>
-        );
-      })}
-    </group>
-  );
-}
-
-/**
- * Peaked roof: pyramid from quad edges to center peak.
- * CCW corners → each roof triangle needs outward-facing normal.
- */
-function PeakedRoof({ corners, center, y, flat }: {
-  corners: [number, number][]; center: { x: number; z: number }; y: number; flat: boolean;
-}) {
-  const geo = useMemo(() => {
-    const peakH = flat ? 0.15 : 0.4;
-    const g = new THREE.BufferGeometry();
-    const verts: number[] = [];
-    const normals: number[] = [];
-
-    for (let i = 0; i < corners.length; i++) {
-      const [x1, z1] = corners[i];
-      const [x2, z2] = corners[(i + 1) % corners.length];
-
-      // Triangle: edge base → peak. Wind so normal faces outward (away from center + up).
-      // For CCW corners, the outward side is: c[i], peak, c[i+1]
-      verts.push(
-        x1, y, z1,
-        center.x, y + peakH, center.z,
-        x2, y, z2,
-      );
-
-      // Cross product of two edges of this triangle
-      const e1x = center.x - x1, e1y = peakH, e1z = center.z - z1;
-      const e2x = x2 - x1, e2y = 0, e2z = z2 - z1;
-      let nx = e1y * e2z - e1z * e2y;
-      let ny = e1z * e2x - e1x * e2z;
-      let nz = e1x * e2y - e1y * e2x;
-      // Ensure normal points outward (away from center at base level)
-      const mx = (x1 + x2) / 2 - center.x;
-      const mz = (z1 + z2) / 2 - center.z;
-      if (nx * mx + nz * mz < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      nx /= len; ny /= len; nz /= len;
-      normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
-    }
-
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
-    return g;
-  }, [corners, center, y, flat]);
-
-  return (
-    <mesh geometry={geo} castShadow>
-      <meshLambertMaterial color={PALETTE.roofBlue} />
-    </mesh>
-  );
-}
-
-/** Tower roof: taller pointed pyramid with flag */
-function TowerRoof({ corners, center, y }: {
-  corners: [number, number][]; center: { x: number; z: number }; y: number;
-}) {
-  const geo = useMemo(() => {
-    const peakH = 0.8;
-    const g = new THREE.BufferGeometry();
-    const verts: number[] = [];
-    const normals: number[] = [];
-
-    for (let i = 0; i < corners.length; i++) {
-      const [x1, z1] = corners[i];
-      const [x2, z2] = corners[(i + 1) % corners.length];
-
-      verts.push(x1, y, z1, center.x, y + peakH, center.z, x2, y, z2);
-
-      const e1x = center.x - x1, e1y = peakH, e1z = center.z - z1;
-      const e2x = x2 - x1, e2y = 0, e2z = z2 - z1;
-      let nx = e1y * e2z - e1z * e2y;
-      let ny = e1z * e2x - e1x * e2z;
-      let nz = e1x * e2y - e1y * e2x;
-      const mx = (x1 + x2) / 2 - center.x;
-      const mz = (z1 + z2) / 2 - center.z;
-      if (nx * mx + nz * mz < 0) { nx = -nx; ny = -ny; nz = -nz; }
-      const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      nx /= len; ny /= len; nz /= len;
-      normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
-    }
-
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3));
-    return g;
-  }, [corners, center, y]);
+    return result;
+  }, [batches]);
 
   return (
     <group>
-      <mesh geometry={geo} castShadow>
-        <meshLambertMaterial color={PALETTE.roofBlueLt} />
-      </mesh>
-      {/* Gold tip */}
-      <mesh position={[center.x, y + 0.85, center.z]}>
-        <sphereGeometry args={[0.05, 6, 4]} />
-        <meshLambertMaterial color={PALETTE.goldBright} emissive={PALETTE.gold} emissiveIntensity={0.3} />
-      </mesh>
-      {/* Flag */}
-      <mesh position={[center.x + 0.07, y + 0.95, center.z]} rotation-z={0.1}>
-        <planeGeometry args={[0.18, 0.1]} />
-        <meshLambertMaterial color="#1E3A8A" side={THREE.DoubleSide} /> {/* flag is a flat plane, DoubleSide needed */}
-      </mesh>
-    </group>
-  );
-}
-
-/** Door on ground floor */
-function Door({ corners, center }: { corners: [number, number][]; center: { x: number; z: number } }) {
-  const mx = (corners[0][0] + corners[1][0]) / 2;
-  const mz = (corners[0][1] + corners[1][1]) / 2;
-  const { nx, nz, angle } = wallNormal(corners[0], corners[1], center);
-  const offset = 0.025;
-
-  return (
-    <group position={[mx + nx * offset, 0.25, mz + nz * offset]} rotation-y={angle}>
-      <mesh>
-        <boxGeometry args={[0.2, 0.4, 0.05]} />
-        <meshLambertMaterial color={PALETTE.timberDark} />
-      </mesh>
+      {meshes.map((m, i) => (
+        <mesh key={`${m.color}-${i}`} geometry={m.geometry} castShadow receiveShadow>
+          <meshLambertMaterial color={m.color} />
+        </mesh>
+      ))}
     </group>
   );
 }
