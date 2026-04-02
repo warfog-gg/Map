@@ -110,17 +110,17 @@ function QuadBlock({ corners, center, y, isTop, isBottom, level, height, neighbo
     <group position={[0, y, 0]}>
       {/* Walls (sides) */}
       <mesh geometry={wallGeo} castShadow receiveShadow>
-        <meshLambertMaterial color={wallColor} />
+        <meshLambertMaterial color={wallColor} side={THREE.DoubleSide} />
       </mesh>
 
       {/* Top face */}
       <mesh geometry={topGeo} castShadow receiveShadow>
-        <meshLambertMaterial color={topColor} />
+        <meshLambertMaterial color={topColor} side={THREE.DoubleSide} />
       </mesh>
 
       {/* Bottom face */}
       <mesh geometry={bottomGeo} receiveShadow>
-        <meshLambertMaterial color={wallColor} />
+        <meshLambertMaterial color={wallColor} side={THREE.DoubleSide} />
       </mesh>
 
       {/* Trim at base of block */}
@@ -213,7 +213,7 @@ function TrimRing({ corners, y, color }: { corners: [number, number][]; y: numbe
 
   return (
     <mesh geometry={geo} position={[0, y, 0]}>
-      <meshLambertMaterial color={color} />
+      <meshLambertMaterial color={color} side={THREE.DoubleSide} />
     </mesh>
   );
 }
@@ -286,7 +286,7 @@ function PeakedRoof({ corners, center, y, flat }: {
 
   return (
     <mesh geometry={geo} castShadow>
-      <meshLambertMaterial color={PALETTE.roofBlue} />
+      <meshLambertMaterial color={PALETTE.roofBlue} side={THREE.DoubleSide} />
     </mesh>
   );
 }
@@ -325,7 +325,7 @@ function TowerRoof({ corners, center, y }: {
   return (
     <group>
       <mesh geometry={geo} castShadow>
-        <meshLambertMaterial color={PALETTE.roofBlueLt} />
+        <meshLambertMaterial color={PALETTE.roofBlueLt} side={THREE.DoubleSide} />
       </mesh>
       {/* Gold tip */}
       <mesh position={[center.x, y + 0.85, center.z]}>
