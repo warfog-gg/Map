@@ -14,9 +14,11 @@ import { PALETTE } from './types';
  * Modules are authored so normals face outward (CCW winding from outside).
  */
 
-// ── Helper: build a quad face from 4 vertices (CCW order for outward normal) ──
+// ── Helper: build a quad face from 4 vertices ──
+// In Y-up 3D, horizontal CCW in XZ gives -Y normal, so we reverse winding
+// to get outward-facing normals after bilinear deformation to world space.
 function quad(a: number, b: number, c: number, d: number): number[] {
-  return [a, b, c, a, c, d];
+  return [a, c, b, a, d, c];
 }
 
 // ── Module: Solid full block (all 8 corners filled) ──
@@ -128,11 +130,11 @@ const roofPeaked: Module = {
   indices: [
     // Bottom face
     ...quad(3, 2, 1, 0),
-    // 4 triangular roof faces (CCW from outside)
-    0, 1, 4,  // front
-    1, 2, 4,  // right
-    2, 3, 4,  // back
-    3, 0, 4,  // left
+    // 4 triangular roof faces (reversed winding for Y-up world space)
+    0, 4, 1,  // front
+    1, 4, 2,  // right
+    2, 4, 3,  // back
+    3, 4, 0,  // left
   ],
 };
 
@@ -150,17 +152,15 @@ const roofHalf: Module = {
   indices: [
     // Bottom
     ...quad(3, 2, 1, 0),
-    // Front slope (v=0 side)
-    // — this is the raised edge, it's a flat quad
-    // Back slope (triangles from ridge to back edge)
-    0, 1, 5,
-    0, 5, 4,
-    // Slope face
-    4, 5, 2, 4, 2, 3,
+    // Front face (v=0 side, vertical wall under ridge)
+    0, 5, 1,
+    0, 4, 5,
+    // Back slope (from ridge down to back edge)
+    4, 2, 5, 4, 3, 2,
     // Left triangle
-    3, 0, 4,
+    3, 4, 0,
     // Right triangle
-    1, 2, 5,
+    1, 5, 2,
   ],
 };
 
